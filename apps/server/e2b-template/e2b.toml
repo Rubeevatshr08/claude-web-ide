@@ -1,0 +1,4 @@
+dockerfile = "e2b.Dockerfile"
+template_name = "claude-web-ide"
+start_cmd = "cd /home/user/workspace && npm run dev -- --hostname 0.0.0.0 --port 3000"
+ready_cmd = "curl -sf http://127.0.0.1:3000 > /dev/null"

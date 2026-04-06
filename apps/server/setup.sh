@@ -1,12 +1,20 @@
 #!/bin/bash
 set -e
 
+CLAUDE_PREFIX="/home/user/.local"
+WORKSPACE_DIR="/home/user/workspace"
+export NPM_CONFIG_PREFIX="$CLAUDE_PREFIX"
+export PATH="$CLAUDE_PREFIX/bin:$PATH"
+
 echo "==> Installing Claude Code CLI..."
-npm install -g @anthropic-ai/claude-code
+if [ ! -x "$CLAUDE_PREFIX/bin/claude" ]; then
+  npm install -g @anthropic-ai/claude-code
+fi
 
 echo "==> Scaffolding Next.js project..."
-if [ ! -f /workspace/package.json ]; then
-  npx create-next-app@latest /workspace \
+mkdir -p "$WORKSPACE_DIR"
+if [ ! -f "$WORKSPACE_DIR/package.json" ]; then
+  npx create-next-app@latest "$WORKSPACE_DIR" \
     --typescript \
     --tailwind \
     --eslint \
@@ -16,21 +24,22 @@ if [ ! -f /workspace/package.json ]; then
 fi
 
 echo "==> Installing workspace dependencies..."
-cd /workspace && npm install
+cd "$WORKSPACE_DIR" && npm install
 
 echo "==> Writing next.config.js with permissive dev origins..."
-cat > /workspace/next.config.ts << 'EOF'
+cat > "$WORKSPACE_DIR/next.config.ts" << 'EOF'
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  allowedDevOrigins: ["*"],
+  allowedDevOrigins: ["*.e2b.app", "*.e2b.dev", "localhost", "127.0.0.1"],
 };
 
 export default nextConfig;
 EOF
 
 echo "==> Starting Next.js dev server..."
-cd /workspace && npm run dev &
+cd "$WORKSPACE_DIR"
+nohup npm run dev -- --hostname 0.0.0.0 --port 3000 > "$WORKSPACE_DIR/.next-dev.log" 2>&1 &
 
 # Wait until port 3000 is accepting connections (up to 60s)
 echo "==> Waiting for dev server to be ready..."

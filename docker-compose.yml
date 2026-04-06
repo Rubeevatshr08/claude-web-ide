@@ -10,6 +10,7 @@ services:
     environment:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - E2B_API_KEY=${E2B_API_KEY}
+      - E2B_TEMPLATE=${E2B_TEMPLATE}
       - PORT=8080
     restart: unless-stopped
 

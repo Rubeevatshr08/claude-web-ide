@@ -10,6 +10,7 @@ interface Message {
 }
 
 interface Props {
+  sessionId: string
   onPreviewUrl: (url: string) => void
   onReload: () => void
 }
@@ -20,7 +21,7 @@ function generateId() {
   return Math.random().toString(36).slice(2)
 }
 
-export default function ChatPanel({ onPreviewUrl, onReload }: Props) {
+export default function ChatPanel({ sessionId, onPreviewUrl, onReload }: Props) {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [status, setStatus] = useState<StatusState>('connecting')
@@ -28,7 +29,7 @@ export default function ChatPanel({ onPreviewUrl, onReload }: Props) {
   const wsRef = useRef<WebSocket | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
-  const reconnectTimer = useRef<NodeJS.Timeout>()
+  const reconnectTimer = useRef<NodeJS.Timeout | null>(null)
 
   const appendOrUpdateAssistant = useCallback((text: string) => {
     setMessages(prev => {
@@ -40,6 +41,14 @@ export default function ChatPanel({ onPreviewUrl, onReload }: Props) {
         ]
       }
       return [...prev, { id: generateId(), role: 'assistant', content: text, isStreaming: true }]
+    })
+  }, [])
+
+  const ensureAssistantPlaceholder = useCallback(() => {
+    setMessages(prev => {
+      const last = prev[prev.length - 1]
+      if (last?.role === 'assistant') return prev
+      return [...prev, { id: generateId(), role: 'assistant', content: '', isStreaming: true }]
     })
   }, [])
 
@@ -59,9 +68,12 @@ export default function ChatPanel({ onPreviewUrl, onReload }: Props) {
 
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return
+    if (!sessionId) return
 
-    const wsUrl = process.env.NEXT_PUBLIC_WS_URL ?? 'ws://localhost:8080'
-    const ws = new WebSocket(wsUrl)
+    const baseWsUrl = process.env.NEXT_PUBLIC_WS_URL ?? 'ws://localhost:8080'
+    const wsUrl = new URL(baseWsUrl)
+    wsUrl.searchParams.set('sessionId', sessionId)
+    const ws = new WebSocket(wsUrl.toString())
     wsRef.current = ws
     setStatus('connecting')
     setStatusText('Connecting...')
@@ -94,6 +106,12 @@ export default function ChatPanel({ onPreviewUrl, onReload }: Props) {
         }])
       }
 
+      if (msg.type === 'claude_turn_started') {
+        setStatus('thinking')
+        setStatusText('Claude is responding...')
+        ensureAssistantPlaceholder()
+      }
+
       if (msg.type === 'claude') {
         const payload = msg.payload
         // stream-json event types: assistant, result, system, tool_use, tool_result
@@ -113,6 +131,7 @@ export default function ChatPanel({ onPreviewUrl, onReload }: Props) {
       if (msg.type === 'claude_raw') {
         // Raw text fallback — only append if not empty noise
         if (msg.payload?.trim()) {
+          setStatus('thinking')
           appendOrUpdateAssistant(msg.payload)
         }
       }
@@ -136,7 +155,7 @@ export default function ChatPanel({ onPreviewUrl, onReload }: Props) {
   setStatus('error')
   setStatusText('Disconnected — refresh the page to reconnect')
 }
-  }, [onPreviewUrl, appendOrUpdateAssistant, finalizeAssistant])
+  }, [sessionId, onPreviewUrl, appendOrUpdateAssistant, ensureAssistantPlaceholder, finalizeAssistant])
 
   useEffect(() => {
     connect()
@@ -148,7 +167,7 @@ export default function ChatPanel({ onPreviewUrl, onReload }: Props) {
     }, 30_000)
     return () => {
       clearInterval(heartbeat)
-      clearTimeout(reconnectTimer.current)
+      if (reconnectTimer.current) clearTimeout(reconnectTimer.current)
       wsRef.current?.close()
     }
   }, [connect])
@@ -160,7 +179,7 @@ export default function ChatPanel({ onPreviewUrl, onReload }: Props) {
 
   const sendMessage = () => {
     const text = input.trim()
-    if (!text || wsRef.current?.readyState !== WebSocket.OPEN || status === 'booting') return
+    if (!text || wsRef.current?.readyState !== WebSocket.OPEN || status === 'booting' || status === 'thinking') return
 
     setMessages(prev => [...prev, { id: generateId(), role: 'user', content: text }])
     wsRef.current.send(JSON.stringify({ type: 'user_message', content: text }))

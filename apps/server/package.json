@@ -5,17 +5,25 @@
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
     "build": "tsc",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:studio": "drizzle-kit studio",
+    "e2b:template:create": "e2b template create claude-web-ide -p ./e2b-template -d e2b.Dockerfile -c \"cd /home/user/workspace && npm run dev\" --ready-cmd \"curl -sf http://127.0.0.1:3000 > /dev/null\""
   },
   "dependencies": {
     "@e2b/code-interpreter": "^1.2.0",
+    "better-sqlite3": "^12.8.0",
+    "drizzle-orm": "^0.45.2",
     "uuid": "^9.0.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^20.0.0",
     "@types/uuid": "^9.0.0",
     "@types/ws": "^8.5.10",
+    "drizzle-kit": "^0.31.10",
     "ts-node-dev": "^2.0.0",
     "typescript": "^5.4.0"
   }
