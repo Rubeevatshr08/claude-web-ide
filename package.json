@@ -1,0 +1,13 @@
+{
+  "name": "claude-web-ide",
+  "private": true,
+  "workspaces": ["apps/web", "apps/server"],
+  "scripts": {
+    "dev": "concurrently \"npm run dev --workspace=apps/server\" \"npm run dev --workspace=apps/web\"",
+    "build": "npm run build --workspace=apps/web",
+    "install:all": "npm install"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
