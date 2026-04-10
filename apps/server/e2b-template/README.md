@@ -5,7 +5,7 @@ This folder contains a prebuilt E2B sandbox template for the Web IDE.
 It moves the expensive work out of `createSession()` and into a one-time template build:
 
 - install `@anthropic-ai/claude-code`
-- scaffold the starter Next.js app
+- copy the pre-scaffolded Next.js (Pages Router) + OpenNext template from `templates/`
 - install app dependencies
 - snapshot a running `next dev` process on port `3000`
 

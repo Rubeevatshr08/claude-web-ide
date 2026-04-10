@@ -237,3 +237,54 @@ export async function destroySession(sessionId: string): Promise<void> {
   await markSessionDestroyed(sessionId)
   console.log(`[${sessionId}] Session destroyed`)
 }
+
+export async function deploySessionToCloudflare(sessionId: string): Promise<string> {
+  const session = sessions.get(sessionId)
+  if (!session) {
+    throw new Error(`Session ${sessionId} not found`)
+  }
+
+  const apiToken = process.env.CLOUDFLARE_API_TOKEN
+  const accountId = process.env.CLOUDFLARE_ACCOUNT_ID
+  const dispatchNamespace = process.env.CLOUDFLARE_DISPATCH_NAMESPACE
+
+  if (!apiToken || !accountId || !dispatchNamespace) {
+    throw new Error('Cloudflare credentials (CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_DISPATCH_NAMESPACE) are not configured on the server')
+  }
+
+  console.log(`[${sessionId}] Starting Cloudflare for Platforms deployment...`)
+
+  // 1. Run build
+  const buildResult = await session.sandbox.commands.run('npm run build', {
+    cwd: WORKSPACE_DIR,
+    timeoutMs: 5 * 60 * 1000,
+  })
+
+  if (buildResult.exitCode !== 0) {
+    throw new Error(`Build failed with exit code ${buildResult.exitCode}: ${buildResult.stderr}`)
+  }
+
+  // 2. Deploy to dispatch namespace
+  const deployCmd = `npx -y wrangler deploy --dispatch-namespace ${dispatchNamespace} --name claude-ide-${sessionId.toLowerCase()}`
+
+  const deployResult = await session.sandbox.commands.run(deployCmd, {
+    cwd: WORKSPACE_DIR,
+    timeoutMs: 5 * 60 * 1000,
+    envs: {
+      CLOUDFLARE_API_TOKEN: apiToken,
+      CLOUDFLARE_ACCOUNT_ID: accountId,
+    },
+  })
+
+  if (deployResult.exitCode !== 0) {
+    throw new Error(`Deployment failed with exit code ${deployResult.exitCode}: ${deployResult.stderr}`)
+  }
+
+  // 3. Extract URL or success message from wrangler output
+  const match = deployResult.stdout.match(/https:\/\/[a-zA-Z0-9.-]+\.workers\.dev/)
+  if (match) {
+    return match[0]
+  }
+
+  return `Deployment successful to namespace ${dispatchNamespace} as claude-ide-${sessionId.toLowerCase()}`
+}

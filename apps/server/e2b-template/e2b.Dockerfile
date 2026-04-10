@@ -14,17 +14,15 @@ RUN mkdir -p /home/user/.local /home/user/workspace \
 
 WORKDIR /home/user/workspace
 
-# Install the CLI and scaffold the starter app once during template build.
-RUN npm install -g @anthropic-ai/claude-code create-next-app@latest
-RUN npx create-next-app@latest /home/user/workspace \
-  --typescript \
-  --tailwind \
-  --eslint \
-  --app \
-  --no-git \
-  --yes
+# Install the Claude Code CLI.
+RUN npm install -g @anthropic-ai/claude-code
 
-COPY next.config.ts /home/user/workspace/next.config.ts
+# Copy the pre-scaffolded Next.js template.
+COPY templates/nextjs-pages /home/user/workspace
 
+WORKDIR /home/user/workspace
+
+# Install dependencies in the sandbox.
 RUN npm install
+
 RUN chown -R 1000:1000 /home/user

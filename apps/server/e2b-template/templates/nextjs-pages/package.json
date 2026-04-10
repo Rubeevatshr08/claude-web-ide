@@ -1,0 +1,28 @@
+{
+  "name": "claude-web-ide-sandbox",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "opennextjs-cloudflare build",
+    "start": "next start",
+    "lint": "next lint",
+    "preview": "opennextjs-cloudflare preview",
+    "deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy"
+  },
+  "dependencies": {
+    "@opennextjs/cloudflare": "latest",
+    "next": "latest",
+    "react": "latest",
+    "react-dom": "latest"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "eslint": "latest",
+    "eslint-config-next": "latest",
+    "typescript": "latest",
+    "wrangler": "latest"
+  }
+}

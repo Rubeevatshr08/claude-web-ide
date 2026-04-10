@@ -8,6 +8,7 @@ import {
   listActiveSessionIds,
   runClaudeTurn,
   touchSession,
+  deploySessionToCloudflare,
 } from './session'
 import { initSessionStore, listSessionRecords } from './session-store'
 
@@ -127,6 +128,28 @@ const httpServer = createServer((req, res) => {
         console.error(`[${sessionId}] Failed to destroy session via API:`, err)
         res.writeHead(500, { 'Content-Type': 'application/json' })
         res.end(JSON.stringify({ error: 'Failed to destroy session' }))
+      })
+    return
+  }
+
+  if (req.method === 'POST' && url.pathname.match(/\/sessions\/[^/]+\/deploy/)) {
+    const sessionId = decodeURIComponent(url.pathname.split('/')[2]).trim()
+
+    if (!sessionId) {
+      res.writeHead(400, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: 'sessionId is required' }))
+      return
+    }
+
+    void deploySessionToCloudflare(sessionId)
+      .then((url) => {
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ url }))
+      })
+      .catch((err) => {
+        console.error(`[${sessionId}] Failed to deploy session via API:`, err)
+        res.writeHead(500, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ error: err.message || 'Failed to deploy session' }))
       })
     return
   }
