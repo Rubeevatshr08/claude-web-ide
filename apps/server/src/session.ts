@@ -1,5 +1,5 @@
 import { Sandbox, CommandHandle } from '@e2b/code-interpreter'
-import { markSessionDestroyed, upsertSessionRecord } from './session-store'
+import { getSessionRecord, markSessionDestroyed, upsertSessionRecord } from './session-store'
 
 export interface Session {
   id: string
@@ -74,12 +74,33 @@ export async function connectToSessionProcess(
   sessionId: string,
   _handlers: ClaudeOutputHandlers = {}
 ): Promise<Session | undefined> {
-  const session = sessions.get(sessionId)
-  if (!session) return undefined
+  const existing = sessions.get(sessionId)
+  if (existing) {
+    existing.lastActivity = Date.now()
+    resetIdleTimer(sessionId, existing)
+    return existing
+  }
 
-  session.lastActivity = Date.now()
-  resetIdleTimer(sessionId, session)
-  return session
+  // Try to restore from DB
+  const record = await getSessionRecord(sessionId)
+  if (!record || record.status === 'destroyed') return undefined
+
+  console.log(`[${sessionId}] Restoring session from DB...`)
+  try {
+    const sandbox = await Sandbox.connect(record.sandboxId)
+    const session: Session = {
+      id: sessionId,
+      sandbox,
+      previewUrl: record.previewUrl,
+      lastActivity: Date.now(),
+    }
+    sessions.set(sessionId, session)
+    resetIdleTimer(sessionId, session)
+    return session
+  } catch (err) {
+    console.error(`[${sessionId}] Failed to reconnect to sandbox ${record.sandboxId}:`, err)
+    return undefined
+  }
 }
 
 async function runFallbackSetup(sessionId: string, sandbox: Sandbox): Promise<void> {
@@ -238,7 +259,18 @@ export async function destroySession(sessionId: string): Promise<void> {
   console.log(`[${sessionId}] Session destroyed`)
 }
 
-export async function deploySessionToCloudflare(sessionId: string): Promise<string> {
+export interface DeploymentResult {
+  url?: string
+  deployedName: string
+  namespace: string
+  previewUrl: string
+}
+
+export async function deploySessionToCloudflare(
+  sessionId: string,
+  handlers: ClaudeOutputHandlers = {}
+): Promise<DeploymentResult> {
+
   const session = sessions.get(sessionId)
   if (!session) {
     throw new Error(`Session ${sessionId} not found`)
@@ -254,25 +286,94 @@ export async function deploySessionToCloudflare(sessionId: string): Promise<stri
 
   console.log(`[${sessionId}] Starting Cloudflare for Platforms deployment...`)
 
-  // 1. Run build
-  const buildResult = await session.sandbox.commands.run('npm run build', {
+  // 1. Standard Next.js build for local preview
+  console.log(`[${sessionId}] Running standard Next.js build for preview...`)
+  const nextBuildResult = await session.sandbox.commands.run('npm run build', {
     cwd: WORKSPACE_DIR,
-    timeoutMs: 5 * 60 * 1000,
+    timeoutMs: 0,
+    envs: {
+      NODE_OPTIONS: '--max-old-space-size=1536',
+      NEXT_TELEMETRY_DISABLED: '1',
+    },
+    onStdout: (data) => {
+      console.log(`[${sessionId}][next-build] ${data.trim()}`)
+      void handlers.onStdout?.(data)
+    },
+    onStderr: (data) => {
+      console.error(`[${sessionId}][next-build:err] ${data.trim()}`)
+      void handlers.onStderr?.(data)
+    },
   })
 
-  if (buildResult.exitCode !== 0) {
-    throw new Error(`Build failed with exit code ${buildResult.exitCode}: ${buildResult.stderr}`)
+  if (nextBuildResult.exitCode !== 0) {
+    throw new Error(`Next.js build failed with exit code ${nextBuildResult.exitCode}`)
   }
+
+  // 1.5. Start the production server for preview
+  console.log(`[${sessionId}] Killing existing server on port 3000...`)
+  await session.sandbox.commands.run('fuser -k 3000/tcp || true')
+
+  console.log(`[${sessionId}] Starting production preview server...`)
+  await session.sandbox.commands.run('npm run start', {
+    cwd: WORKSPACE_DIR,
+    background: true,
+    onStdout: (data) => {
+      console.log(`[${sessionId}][server] ${data.trim()}`)
+      void handlers.onStdout?.(data)
+    },
+    onStderr: (data) => {
+      console.error(`[${sessionId}][server:err] ${data.trim()}`)
+      void handlers.onStderr?.(data)
+    },
+  })
+
+  console.log(`[${sessionId}] Waiting for port 3000 to be ready...`)
+  await session.sandbox.commands.run(
+    "timeout 30 bash -c 'until nc -z localhost 3000; do sleep 1; done'",
+    { timeoutMs: 35000 }
+  )
+
+  // 2. OpenNext/Cloudflare build for deployment
+  console.log(`[${sessionId}] Running OpenNext/Cloudflare build for deployment...`)
+  const cfBuildResult = await session.sandbox.commands.run('npm run build:cloudflare', {
+    cwd: WORKSPACE_DIR,
+    timeoutMs: 0,
+    envs: {
+      NODE_OPTIONS: '--max-old-space-size=1536',
+      NEXT_TELEMETRY_DISABLED: '1',
+    },
+    onStdout: (data) => {
+      console.log(`[${sessionId}][cf-build] ${data.trim()}`)
+      void handlers.onStdout?.(data)
+    },
+    onStderr: (data) => {
+      console.error(`[${sessionId}][cf-build:err] ${data.trim()}`)
+      void handlers.onStderr?.(data)
+    },
+  })
+
+  if (cfBuildResult.exitCode !== 0) {
+    throw new Error(`Cloudflare build failed with exit code ${cfBuildResult.exitCode}`)
+  }
+
 
   // 2. Deploy to dispatch namespace
   const deployCmd = `npx -y wrangler deploy --dispatch-namespace ${dispatchNamespace} --name claude-ide-${sessionId.toLowerCase()}`
 
   const deployResult = await session.sandbox.commands.run(deployCmd, {
     cwd: WORKSPACE_DIR,
-    timeoutMs: 5 * 60 * 1000,
+    timeoutMs: 0,
     envs: {
       CLOUDFLARE_API_TOKEN: apiToken,
       CLOUDFLARE_ACCOUNT_ID: accountId,
+    },
+    onStdout: (data) => {
+      console.log(`[${sessionId}][deploy] ${data.trim()}`)
+      void handlers.onStdout?.(data)
+    },
+    onStderr: (data) => {
+      console.error(`[${sessionId}][deploy:err] ${data.trim()}`)
+      void handlers.onStderr?.(data)
     },
   })
 
@@ -280,11 +381,25 @@ export async function deploySessionToCloudflare(sessionId: string): Promise<stri
     throw new Error(`Deployment failed with exit code ${deployResult.exitCode}: ${deployResult.stderr}`)
   }
 
-  // 3. Extract URL or success message from wrangler output
-  const match = deployResult.stdout.match(/https:\/\/[a-zA-Z0-9.-]+\.workers\.dev/)
-  if (match) {
-    return match[0]
-  }
+  // 3. Construct the production URL using the custom domain router
+  const deployedUrl = `https://${sessionId.toLowerCase()}.weboreels.com`
 
-  return `Deployment successful to namespace ${dispatchNamespace} as claude-ide-${sessionId.toLowerCase()}`
+  // Save to DB
+  void upsertSessionRecord({
+    id: sessionId,
+    sandboxId: session.sandbox.sandboxId,
+    previewUrl: session.previewUrl,
+    createdAt: new Date(session.lastActivity).toISOString(), // rough estimate
+    updatedAt: new Date().toISOString(),
+    status: 'active',
+    deployedUrl,
+  })
+  
+  return {
+    url: deployedUrl,
+    deployedName: `claude-ide-${sessionId.toLowerCase()}`,
+    namespace: dispatchNamespace,
+    previewUrl: session.previewUrl,
+  }
 }
+

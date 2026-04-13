@@ -30,12 +30,30 @@ npm install @opennextjs/cloudflare@latest wrangler@latest
 
 echo "==> Writing OpenNext config..."
 cat > "$WORKSPACE_DIR/open-next.config.ts" << 'EOF'
-import type { OpenNextConfig } from "@opennextjs/cloudflare";
 export default {
   default: {
-    runtime: "cloudflare-worker",
+    override: {
+      wrapper: "cloudflare-node",
+      converter: "edge",
+      proxyExternalRequest: "fetch",
+      incrementalCache: "dummy",
+      tagCache: "dummy",
+      queue: "dummy",
+    },
   },
-} satisfies OpenNextConfig;
+  edgeExternals: ["node:crypto"],
+  middleware: {
+    external: true,
+    override: {
+      wrapper: "cloudflare-edge",
+      converter: "edge",
+      proxyExternalRequest: "fetch",
+      incrementalCache: "dummy",
+      tagCache: "dummy",
+      queue: "dummy",
+    },
+  },
+};
 EOF
 
 echo "==> Writing wrangler.jsonc..."

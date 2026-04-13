@@ -8,6 +8,7 @@ export const sessionsTable = sqliteTable('sessions', {
   updatedAt: text('updated_at').notNull(),
   status: text('status', { enum: ['active', 'destroyed'] }).notNull(),
   destroyedAt: text('destroyed_at'),
+  deployedUrl: text('deployed_url'),
 })
 
 export const messagesTable = sqliteTable('messages', {

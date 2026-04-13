@@ -12,6 +12,7 @@ export interface SessionRecord {
   updatedAt: string
   status: 'active' | 'destroyed'
   destroyedAt?: string
+  deployedUrl?: string
 }
 
 let initialized = false
@@ -36,7 +37,24 @@ export async function listSessionRecords(): Promise<SessionRecord[]> {
     updatedAt: row.updatedAt,
     status: row.status,
     destroyedAt: row.destroyedAt ?? undefined,
+    deployedUrl: row.deployedUrl ?? undefined,
   }))
+}
+
+export async function getSessionRecord(id: string): Promise<SessionRecord | undefined> {
+  await initSessionStore()
+  const row = db.select().from(sessionsTable).where(eq(sessionsTable.id, id)).get()
+  if (!row) return undefined
+  return {
+    id: row.id,
+    sandboxId: row.sandboxId,
+    previewUrl: row.previewUrl,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    status: row.status,
+    destroyedAt: row.destroyedAt ?? undefined,
+    deployedUrl: row.deployedUrl ?? undefined,
+  }
 }
 
 export async function upsertSessionRecord(record: SessionRecord): Promise<void> {
@@ -50,6 +68,7 @@ export async function upsertSessionRecord(record: SessionRecord): Promise<void> 
       updatedAt: record.updatedAt,
       status: record.status,
       destroyedAt: record.destroyedAt ?? null,
+      deployedUrl: record.deployedUrl ?? null,
     })
     .onConflictDoUpdate({
       target: sessionsTable.id,
@@ -60,6 +79,7 @@ export async function upsertSessionRecord(record: SessionRecord): Promise<void> 
         updatedAt: record.updatedAt,
         status: record.status,
         destroyedAt: record.destroyedAt ?? null,
+        deployedUrl: record.deployedUrl ?? null,
       },
     })
     .run()

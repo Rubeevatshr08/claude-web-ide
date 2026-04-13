@@ -6,7 +6,7 @@ ENV PATH=/home/user/.local/bin:$PATH
 ENV NEXT_TELEMETRY_DISABLED=1
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends curl ca-certificates \
+  && apt-get install -y --no-install-recommends curl ca-certificates netcat-openbsd psmisc \
   && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /home/user/.local /home/user/workspace \
@@ -23,6 +23,6 @@ COPY templates/nextjs-pages /home/user/workspace
 WORKDIR /home/user/workspace
 
 # Install dependencies in the sandbox.
-RUN npm install
+RUN npm install --legacy-peer-deps
 
 RUN chown -R 1000:1000 /home/user

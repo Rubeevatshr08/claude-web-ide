@@ -1,0 +1,1 @@
+ALTER TABLE `sessions` ADD `deployed_url` text;

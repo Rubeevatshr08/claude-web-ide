@@ -151,10 +151,13 @@ export default function ChatPanel({ sessionId, onPreviewUrl, onReload }: Props) 
       setStatusText('Connection error')
     }
 
-   ws.onclose = () => {
-  setStatus('error')
-  setStatusText('Disconnected — refresh the page to reconnect')
-}
+    ws.onclose = () => {
+      wsRef.current = null
+      if (reconnectTimer.current) clearTimeout(reconnectTimer.current)
+      reconnectTimer.current = setTimeout(() => {
+        connect()
+      }, 1000)
+    }
   }, [sessionId, onPreviewUrl, appendOrUpdateAssistant, ensureAssistantPlaceholder, finalizeAssistant])
 
   useEffect(() => {

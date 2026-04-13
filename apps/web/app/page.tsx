@@ -85,7 +85,22 @@ export default function Home() {
               >
                 <div className="min-w-0">
                   <div className="truncate font-mono text-sm text-gray-200">{session.id}</div>
-                  <div className="mt-1 truncate text-xs text-gray-500">Sandbox: {session.sandboxId}</div>
+                  <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1">
+                    <span className="truncate text-xs text-gray-500">Sandbox: {session.sandboxId}</span>
+                    {session.deployedUrl && (
+                      <a 
+                        href={session.deployedUrl} 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="text-[11px] text-green-500 hover:text-green-400 font-semibold flex items-center gap-1 bg-green-950/30 px-2 py-0.5 rounded border border-green-900/50 transition-colors"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="w-3 h-3">
+                          <path fillRule="evenodd" d="M8.914 6.025a.75.75 0 0 1 1.06 0 3.5 3.5 0 0 1 0 4.95l-2 2a3.5 3.5 0 0 1-4.95 0 3.5 3.5 0 0 1 0-4.95.75.75 0 0 1 1.06 1.06 2 2 0 0 0 0 2.83 2 2 0 0 0 2.83 0l2-2a2 2 0 0 0 0-2.83.75.75 0 0 1 0-1.06Zm2.122-4.122a.75.75 0 0 1 0 1.06 2 2 0 0 0 0 2.83l-2 2a2 2 0 0 0-2.83 0 .75.75 0 0 1-1.06-1.06 3.5 3.5 0 0 1 4.95 0l2-2a3.5 3.5 0 0 1 1.06 0Z" clipRule="evenodd" />
+                        </svg>
+                        Project Live
+                      </a>
+                    )}
+                  </div>
                 </div>
                 <div className="text-sm text-gray-400">{new Date(session.createdAt).toLocaleString()}</div>
                 <div className="flex items-center gap-2">

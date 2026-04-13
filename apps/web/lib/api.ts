@@ -9,4 +9,5 @@ export interface SessionSummary {
   createdAt: string
   updatedAt: string
   status: 'active' | 'destroyed'
+  deployedUrl?: string
 }

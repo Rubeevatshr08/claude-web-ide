@@ -38,6 +38,7 @@ void initSessionStore().catch((err) => {
 
 const PORT = Number(process.env.PORT ?? 8080)
 const WEB_ORIGIN = process.env.WEB_ORIGIN
+const sessionWebSockets = new Map<string, WebSocket>()
 
 function getAllowedOrigin(origin?: string | null): string {
   if (WEB_ORIGIN) return WEB_ORIGIN
@@ -80,9 +81,8 @@ const httpServer = createServer((req, res) => {
   if (req.method === 'GET' && url.pathname === '/sessions') {
     void listSessionRecords()
       .then((records) => {
-        const activeIds = new Set(listActiveSessionIds())
         res.writeHead(200, { 'Content-Type': 'application/json' })
-        res.end(JSON.stringify(records.filter((record) => record.status === 'active' && activeIds.has(record.id))))
+        res.end(JSON.stringify(records.filter((record) => record.status === 'active')))
       })
       .catch((err) => {
         console.error('Failed to list sessions:', err)
@@ -132,6 +132,8 @@ const httpServer = createServer((req, res) => {
     return
   }
 
+
+
   if (req.method === 'POST' && url.pathname.match(/\/sessions\/[^/]+\/deploy/)) {
     const sessionId = decodeURIComponent(url.pathname.split('/')[2]).trim()
 
@@ -141,10 +143,16 @@ const httpServer = createServer((req, res) => {
       return
     }
 
-    void deploySessionToCloudflare(sessionId)
-      .then((url) => {
+    const ws = sessionWebSockets.get(sessionId)
+    const handlers = ws ? createClaudeHandlers(ws) : {}
+
+    void deploySessionToCloudflare(sessionId, handlers)
+      .then((result) => {
         res.writeHead(200, { 'Content-Type': 'application/json' })
-        res.end(JSON.stringify({ url }))
+        res.end(JSON.stringify({ 
+          url: result.url || result.previewUrl,
+          details: result 
+        }))
       })
       .catch((err) => {
         console.error(`[${sessionId}] Failed to deploy session via API:`, err)
@@ -201,6 +209,10 @@ wss.on('connection', async (ws: WebSocket, req: IncomingMessage) => {
   const sessionId = getSessionId(req)
   console.log(`[${sessionId}] New WebSocket connection from ${req.socket.remoteAddress}`)
 
+  if (sessionId) {
+    sessionWebSockets.set(sessionId, ws)
+  }
+
   // Notify client we're booting
   send(ws, { type: 'status', message: 'Booting sandbox — this takes ~30 seconds...' })
 
@@ -211,12 +223,21 @@ wss.on('connection', async (ws: WebSocket, req: IncomingMessage) => {
       throw new Error('sessionId is required')
     }
     const handlers = createClaudeHandlers(ws)
-    session = (await connectToSessionProcess(sessionId, handlers)) ?? null
+    
+    // Wait for session to be ready (up to 5 seconds)
+    let retries = 50
+    while (retries > 0) {
+      session = (await connectToSessionProcess(sessionId, handlers)) ?? null
+      if (session) break
+      await new Promise(resolve => setTimeout(resolve, 100))
+      retries--
+    }
+
     if (!session) {
-      throw new Error(`Session ${sessionId} not found`)
+      throw new Error(`Session ${sessionId} not found after waiting. It may have been lost during a server restart.`)
     }
   } catch (err: any) {
-    console.error(`[${sessionId}] Failed to create session:`, err)
+    console.error(`[${sessionId}] Failed to connect to session:`, err)
     send(ws, { type: 'error', payload: `Failed to start sandbox: ${err.message}` })
     ws.close()
     return
@@ -255,6 +276,9 @@ wss.on('connection', async (ws: WebSocket, req: IncomingMessage) => {
   // Cleanup on disconnect
   ws.on('close', async () => {
     console.log(`[${sessionId}] WebSocket closed — detaching session`)
+    if (sessionId) {
+      sessionWebSockets.delete(sessionId)
+    }
     await detachSession(sessionId)
   })
 

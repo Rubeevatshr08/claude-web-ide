@@ -1,0 +1,15 @@
+name = "claude-ide-router"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+
+routes = [
+  { pattern = "weboreels.com/*", zone_name = "weboreels.com" },
+  { pattern = "*.weboreels.com/*", zone_name = "weboreels.com" }
+]
+
+[[dispatch_namespaces]]
+binding = "DISPATCHER"
+namespace = "weboreel"
+
+[vars]
+WORKER_PREFIX = "claude-ide-"
