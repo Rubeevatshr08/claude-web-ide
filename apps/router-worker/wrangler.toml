@@ -1,4 +1,4 @@
-name = "claude-ide-router"
+name = "opencode-ide-router"
 main = "src/index.ts"
 compatibility_date = "2025-01-01"
 
@@ -12,4 +12,4 @@ binding = "DISPATCHER"
 namespace = "weboreel"
 
 [vars]
-WORKER_PREFIX = "claude-ide-"
+WORKER_PREFIX = "opencode-ide-"

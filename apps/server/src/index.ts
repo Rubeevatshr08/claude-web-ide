@@ -6,7 +6,7 @@ import {
   destroySession,
   detachSession,
   listActiveSessionIds,
-  runClaudeTurn,
+  runOpenCodeTurn,
   touchSession,
   deploySessionToCloudflare,
 } from './session'
@@ -132,6 +132,25 @@ const httpServer = createServer((req, res) => {
     return
   }
 
+  if (req.method === 'GET' && url.pathname.match(/\/sessions\/[^/]+\/exists/)) {
+    const sessionId = decodeURIComponent(url.pathname.split('/')[2]).trim()
+    void listSessionRecords()
+      .then((records) => {
+        const record = records.find(r => r.id === sessionId && r.status === 'active')
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ 
+          exists: !!record,
+          previewUrl: record?.previewUrl,
+          sandboxId: record?.sandboxId
+        }))
+      })
+      .catch(() => {
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ exists: false }))
+      })
+    return
+  }
+
 
 
   if (req.method === 'POST' && url.pathname.match(/\/sessions\/[^/]+\/deploy/)) {
@@ -144,7 +163,7 @@ const httpServer = createServer((req, res) => {
     }
 
     const ws = sessionWebSockets.get(sessionId)
-    const handlers = ws ? createClaudeHandlers(ws) : {}
+    const handlers = ws ? createOpenCodeHandlers(ws) : {}
 
     void deploySessionToCloudflare(sessionId, handlers)
       .then((result) => {
@@ -166,7 +185,19 @@ const httpServer = createServer((req, res) => {
   res.end()
 })
 
-const wss = new WebSocketServer({ server: httpServer })
+const wss = new WebSocketServer({ noServer: true })
+
+httpServer.on('upgrade', (request, socket, head) => {
+  const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`)
+  
+  if (url.pathname === '/ws') {
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      wss.emit('connection', ws, request)
+    })
+  } else {
+    socket.destroy()
+  }
+})
 
 function send(ws: WebSocket, data: object) {
   if (ws.readyState === WebSocket.OPEN) {
@@ -179,7 +210,7 @@ function getSessionId(req: IncomingMessage): string {
   return url.searchParams.get('sessionId')?.trim() || ''
 }
 
-function createClaudeHandlers(ws: WebSocket) {
+function createOpenCodeHandlers(ws: WebSocket) {
   let stdoutBuffer = ''
 
   return {
@@ -191,9 +222,9 @@ function createClaudeHandlers(ws: WebSocket) {
       for (const line of lines) {
         if (!line.trim()) continue
         try {
-          send(ws, { type: 'claude', payload: JSON.parse(line) })
+          send(ws, { type: 'opencode', payload: JSON.parse(line) })
         } catch {
-          send(ws, { type: 'claude_raw', payload: line })
+          send(ws, { type: 'opencode_raw', payload: line })
         }
       }
     },
@@ -222,9 +253,21 @@ wss.on('connection', async (ws: WebSocket, req: IncomingMessage) => {
     if (!sessionId) {
       throw new Error('sessionId is required')
     }
-    const handlers = createClaudeHandlers(ws)
+    const handlers = createOpenCodeHandlers(ws)
     
-    // Wait for session to be ready (up to 5 seconds)
+    // Fail fast if session record doesn't exist at all
+    const records = await listSessionRecords()
+    if (!records.some(r => r.id === sessionId && r.status === 'active')) {
+       send(ws, { 
+        type: 'session_not_found', 
+        sessionId, 
+        message: 'Session record not found in database.' 
+      })
+      ws.close(4404, 'Session not found')
+      return
+    }
+
+    // Session exists but process might be booting
     let retries = 50
     while (retries > 0) {
       session = (await connectToSessionProcess(sessionId, handlers)) ?? null
@@ -234,7 +277,13 @@ wss.on('connection', async (ws: WebSocket, req: IncomingMessage) => {
     }
 
     if (!session) {
-      throw new Error(`Session ${sessionId} not found after waiting. It may have been lost during a server restart.`)
+      send(ws, { 
+        type: 'session_not_found', 
+        sessionId, 
+        message: 'Session expired or lost. Please start a new session.' 
+      })
+      ws.close(4404, 'Session not found')
+      return
     }
   } catch (err: any) {
     console.error(`[${sessionId}] Failed to connect to session:`, err)
@@ -260,8 +309,8 @@ wss.on('connection', async (ws: WebSocket, req: IncomingMessage) => {
         const content: string = msg.content?.trim()
         if (!content) return
 
-        send(ws, { type: 'claude_turn_started' })
-        await runClaudeTurn(sessionId, content, createClaudeHandlers(ws))
+        send(ws, { type: 'opencode_turn_started' })
+        await runOpenCodeTurn(sessionId, content, createOpenCodeHandlers(ws))
       }
 
       if (msg.type === 'ping') {

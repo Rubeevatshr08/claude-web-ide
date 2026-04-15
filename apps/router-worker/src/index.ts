@@ -12,7 +12,7 @@ export default {
     const host = url.hostname                  // "abc123.somedomain.com"
     const scriptId = host.split('.')[0]        // "abc123"
 
-    if (!scriptId || scriptId === 'claude-ide-router') {
+    if (!scriptId || scriptId === 'opencode-ide-router') {
       return new Response('Missing or invalid session ID in subdomain', { status: 400 })
     }
 

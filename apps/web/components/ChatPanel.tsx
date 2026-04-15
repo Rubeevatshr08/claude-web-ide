@@ -30,6 +30,7 @@ export default function ChatPanel({ sessionId, onPreviewUrl, onReload }: Props) 
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const reconnectTimer = useRef<NodeJS.Timeout | null>(null)
+  const reconnectAttempts = useRef(0)
 
   const appendOrUpdateAssistant = useCallback((text: string) => {
     setMessages(prev => {
@@ -72,6 +73,7 @@ export default function ChatPanel({ sessionId, onPreviewUrl, onReload }: Props) 
 
     const baseWsUrl = process.env.NEXT_PUBLIC_WS_URL ?? 'ws://localhost:8080'
     const wsUrl = new URL(baseWsUrl)
+    wsUrl.pathname = '/ws'
     wsUrl.searchParams.set('sessionId', sessionId)
     const ws = new WebSocket(wsUrl.toString())
     wsRef.current = ws
@@ -106,15 +108,21 @@ export default function ChatPanel({ sessionId, onPreviewUrl, onReload }: Props) 
         }])
       }
 
-      if (msg.type === 'claude_turn_started') {
+      if (msg.type === 'opencode_turn_started') {
         setStatus('thinking')
-        setStatusText('Claude is responding...')
+        setStatusText('OpenCode is responding...')
         ensureAssistantPlaceholder()
       }
 
-      if (msg.type === 'claude') {
+      if (msg.type === 'ready') {
+        setStatus('ready')
+        setStatusText('Ready')
+        onPreviewUrl(msg.previewUrl)
+      }
+
+      if (msg.type === 'opencode') {
         const payload = msg.payload
-        // stream-json event types: assistant, result, system, tool_use, tool_result
+        // stream-json event types: assistant, result, system, tool_use, tool_result, file_changed
         if (payload.type === 'assistant' && payload.message?.content) {
           for (const block of payload.message.content) {
             if (block.type === 'text' && block.text) {
@@ -126,14 +134,31 @@ export default function ChatPanel({ sessionId, onPreviewUrl, onReload }: Props) 
         if (payload.type === 'result') {
           finalizeAssistant()
         }
+        if (payload.type === 'file_changed') {
+          // 🔥 Reload preview when AI saves a file
+          onReload()
+        }
       }
 
-      if (msg.type === 'claude_raw') {
+      if (msg.type === 'opencode_raw') {
         // Raw text fallback — only append if not empty noise
         if (msg.payload?.trim()) {
           setStatus('thinking')
           appendOrUpdateAssistant(msg.payload)
         }
+      }
+
+      if (msg.type === 'session_not_found') {
+        setStatus('error')
+        setStatusText('Session not found or expired.')
+        setMessages(prev => [...prev, {
+          id: generateId(),
+          role: 'system',
+          content: '❌ Session not found. Please go back to home and start a new session.',
+        }])
+        if (reconnectTimer.current) clearTimeout(reconnectTimer.current)
+        ws.close()
+        return
       }
 
       if (msg.type === 'error') {
@@ -151,12 +176,20 @@ export default function ChatPanel({ sessionId, onPreviewUrl, onReload }: Props) 
       setStatusText('Connection error')
     }
 
-    ws.onclose = () => {
+    ws.onclose = (event) => {
       wsRef.current = null
-      if (reconnectTimer.current) clearTimeout(reconnectTimer.current)
-      reconnectTimer.current = setTimeout(() => {
-        connect()
-      }, 1000)
+      if (event.code === 4404) return // Session not found, don't retry
+
+      if (reconnectAttempts.current < 5) {
+        reconnectAttempts.current++
+        if (reconnectTimer.current) clearTimeout(reconnectTimer.current)
+        reconnectTimer.current = setTimeout(() => {
+          connect()
+        }, 1000 * Math.pow(2, reconnectAttempts.current)) // Exponential backoff
+      } else {
+        setStatus('error')
+        setStatusText('Lost connection. Please refresh.')
+      }
     }
   }, [sessionId, onPreviewUrl, appendOrUpdateAssistant, ensureAssistantPlaceholder, finalizeAssistant])
 
@@ -188,7 +221,7 @@ export default function ChatPanel({ sessionId, onPreviewUrl, onReload }: Props) 
     wsRef.current.send(JSON.stringify({ type: 'user_message', content: text }))
     setInput('')
     setStatus('thinking')
-    setStatusText('Claude is working...')
+    setStatusText('OpenCode is working...')
     inputRef.current?.focus()
   }
 

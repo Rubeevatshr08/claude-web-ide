@@ -23,13 +23,13 @@ export const messagesTable = sqliteTable('messages', {
   updatedAt: text('updated_at').notNull(),
 })
 
-export const claudeTurnsTable = sqliteTable('claude_turns', {
+export const opencodeTurnsTable = sqliteTable('opencode_turns', {
   id: text('id').primaryKey(),
   sessionId: text('session_id')
     .notNull()
     .references(() => sessionsTable.id, { onDelete: 'cascade' }),
   prompt: text('prompt').notNull(),
-  claudeSessionId: text('claude_session_id'),
+  opencodeSessionId: text('opencode_session_id'),
   status: text('status', { enum: ['queued', 'running', 'completed', 'failed'] }).notNull(),
   error: text('error'),
   createdAt: text('created_at').notNull(),

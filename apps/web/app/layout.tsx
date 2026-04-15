@@ -2,8 +2,8 @@ import type { Metadata } from 'next'
 import './globals.css'
 
 export const metadata: Metadata = {
-  title: 'Claude Web IDE',
-  description: 'Browser-based AI coding environment powered by Claude',
+  title: 'OpenCode Web IDE',
+  description: 'Browser-based AI coding environment powered by OpenCode and OpenRouter',
 }
 
 export default function RootLayout({

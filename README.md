@@ -1,6 +1,6 @@
-# Claude Web IDE
+# OpenCode Web IDE
 
-A high-performance, AI-powered web IDE that allows users to generate, preview, and deploy Next.js applications in secure, ephemeral E2B sandboxes.
+A high-performance, AI-powered web IDE that allows users to generate, preview, and deploy Next.js applications in secure, ephemeral E2B sandboxes using OpenCode and OpenRouter.
 
 ## 🏗 Architecture Overview
 
@@ -16,7 +16,7 @@ Built with Next.js 15 (App Router).
 ### 2. **Backend Server (`apps/server`)**
 A Node.js service managing the sandbox lifecycle and deployment orchestration.
 - **HTTP API (`index.ts`)**: Management endpoints for session lifecycle, builds, and persistence.
-- **Session Manager (`session.ts`)**: Orchestrates sandbox creation, Claude CLI turns, and the complex dual-build deployment pipeline.
+- **Session Manager (`session.ts`)**: Orchestrates sandbox creation, OpenCode turns, and the complex dual-build deployment pipeline.
 - **Database Persistence (`session-store.ts`)**: Uses SQLite and Drizzle ORM to keep track of every sandbox (`sandboxId`) and its deployment state (`deployedUrl`), ensuring the IDE survives server restarts.
 
 ### 3. **Router Worker (`apps/router-worker`)**
@@ -43,7 +43,7 @@ To ensure both a fast local preview and a valid edge deployment, the system perf
 ### **3. Routing & Custom Domains**
 We use a **Wildcard Router** pattern on `weboreels.com`:
 - **Router Worker**: Listens on `*.weboreels.com`.
-- **Worker Names**: Every user project is deployed as `claude-ide-{sessionId}`.
+- **Worker Names**: Every user project is deployed as `opencode-ide-{sessionId}`.
 - **Resolution**: The Router extracts `{sessionId}`, appends the prefix, and handles the request via `env.DISPATCHER.get()`.
 
 ---
@@ -51,7 +51,8 @@ We use a **Wildcard Router** pattern on `weboreels.com`:
 ## 🚀 Key Technologies
 
 - **E2B**: Secure, ephemeral code interpreters for running the development environment.
-- **Claude Code**: The underlying AI engine providing low-latency code generation.
+- **OpenCode**: The underlying AI agent providing low-latency code generation.
+- **OpenRouter**: The LLM gateway used to power OpenCode with various models.
 - **Cloudflare for Platforms**: Uses Dispatch Namespaces to host thousands of individual Next.js workers.
 - **Wrangler v4**: Synchronized across the project for modern Cloudflare Workers deployment.
 
@@ -74,7 +75,8 @@ claude-web-ide/
 ## 🔧 Environment Setup
 
 ### **Server (`apps/server/.env`)**
-- `ANTHROPIC_API_KEY`: Required for Claude inside the sandbox.
+- `OPENROUTER_API_KEY`: Required for OpenRouter to power the agent.
+- `OPENROUTER_MODEL`: The model to use (e.g., `anthropic/claude-3.5-sonnet`).
 - `E2B_API_KEY`: Required for sandbox orchestration.
 - `CLOUDFLARE_API_TOKEN`: Required for automated namespace deployments.
 - `CLOUDFLARE_DISPATCH_NAMESPACE`: The namespace where projects are stored (e.g., `weboreel`).

@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
+    "dev": "ts-node-dev --respawn --transpile-only --ignore-watch drizzle,db.sqlite,dist src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
     "db:generate": "drizzle-kit generate",
@@ -14,10 +14,15 @@
   },
   "dependencies": {
     "@e2b/code-interpreter": "^1.2.0",
+    "@langchain/community": "^0.2.33",
+    "@langchain/core": "^0.2.36",
+    "@langchain/openai": "^0.2.11",
     "better-sqlite3": "^12.8.0",
     "drizzle-orm": "^0.45.2",
+    "langchain": "^0.2.20",
     "uuid": "^9.0.0",
-    "ws": "^8.18.0"
+    "ws": "^8.18.0",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",

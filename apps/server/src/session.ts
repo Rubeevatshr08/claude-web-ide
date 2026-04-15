@@ -1,31 +1,37 @@
 import { Sandbox, CommandHandle } from '@e2b/code-interpreter'
 import { getSessionRecord, markSessionDestroyed, upsertSessionRecord } from './session-store'
+import path from 'path'
+
+import { runOpenCodeTurnDirect, ChatMessage } from './agent/opencodeAgent'
+import { db } from './db'
+import { messagesTable } from './schema'
+import { eq, asc } from 'drizzle-orm'
 
 export interface Session {
   id: string
   sandbox: Sandbox
   previewUrl: string
-  claudeSessionId?: string
-  activeClaudeProcess?: CommandHandle
+  openCodeSessionId?: string
+  activeOpenCodeProcess?: any
   pendingTurn?: Promise<void>
   idleTimer?: NodeJS.Timeout
   lastActivity: number
+  chatHistory: ChatMessage[]
 }
 
-export interface ClaudeOutputHandlers {
+export interface OpenCodeOutputHandlers {
   onStdout?: (data: string) => void | Promise<void>
   onStderr?: (data: string) => void | Promise<void>
 }
 
 const sessions = new Map<string, Session>()
 
-const IDLE_TIMEOUT_MS = 15 * 60 * 1000 // 15 minutes
+const IDLE_TIMEOUT_MS = 30 * 60 * 1000 // 30 minutes
 const MAX_SESSION_MS = 60 * 60 * 1000   // 1 hour hard limit
-const CLAUDE_BIN = '/home/user/.local/bin/claude'
-const WORKSPACE_DIR = '/home/user/workspace'
+const WORKSPACE_DIR = process.env.WORKSPACE_PATH || '/home/user/workspace'
 
 export async function createSession(
-  handlers: ClaudeOutputHandlers = {}
+  handlers: OpenCodeOutputHandlers = {}
 ): Promise<Session> {
   const e2bTemplate = process.env.E2B_TEMPLATE?.trim()
 
@@ -45,7 +51,83 @@ export async function createSession(
     await runFallbackSetup(sessionId, sandbox)
   }
 
-  console.log(`[${sessionId}] Setup complete. Getting preview URL...`)
+  console.log(`[${sessionId}] Setup complete. Seeding core files and clearing port 3000...`)
+
+  // Aggressively kill anything on port 3000
+  const killCmd = `
+    fuser -k 3000/tcp || true
+    kill -9 $(lsof -t -i:3000) 2>/dev/null || true
+    kill -9 $(netstat -nlp | grep :3000 | awk '{print $7}' | cut -d/ -f1) 2>/dev/null || true
+  `
+  await sandbox.commands.run(killCmd).catch(() => {})
+
+  // Ensure essential Next.js files exist to prevent "missing required components" errors
+  await sandbox.commands.run('mkdir -p pages styles', { cwd: WORKSPACE_DIR })
+  
+  const _appContent = `import '../styles/globals.css'
+import type { AppProps } from 'next/app'
+
+export default function App({ Component, pageProps }: AppProps) {
+  return <Component {...pageProps} />
+}`
+  const _documentContent = `import { Html, Head, Main, NextScript } from 'next/document'
+
+export default function Document() {
+  return (
+    <Html lang="en">
+      <Head />
+      <body className="bg-black text-white">
+        <Main />
+        <NextScript />
+      </body>
+    </Html>
+  )
+}`
+  const globalsCss = `@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  background: black;
+  color: white;
+}`
+
+  const nextConfigContent = `/** @type {import('next').NextConfig} */
+const nextConfig = {
+  typescript: { ignoreBuildErrors: true },
+  eslint: { ignoreDuringBuilds: true },
+  experimental: {
+    allowedDevOrigins: ['*']
+  }
+};
+export default nextConfig;`
+
+  await sandbox.files.write(path.join(WORKSPACE_DIR, 'pages/_app.tsx'), _appContent)
+  await sandbox.files.write(path.join(WORKSPACE_DIR, 'pages/_document.tsx'), _documentContent)
+  await sandbox.files.write(path.join(WORKSPACE_DIR, 'styles/globals.css'), globalsCss)
+  await sandbox.files.write(path.join(WORKSPACE_DIR, 'next.config.mjs'), nextConfigContent)
+
+  // Clear Next.js cache to prevent ENOENT errors
+  await sandbox.commands.run('rm -rf .next', { cwd: WORKSPACE_DIR }).catch(() => {})
+
+  // Start Next.js dev server explicitly on port 3000
+  void sandbox.commands.run('CHOKIDAR_USEPOLLING=true CHOKIDAR_INTERVAL=500 HOSTNAME=0.0.0.0 PORT=3000 npm run dev', {
+    cwd: WORKSPACE_DIR,
+    background: true,
+    onStdout: (data) => console.log(`[${sessionId}] [dev] ${data.trim()}`),
+    onStderr: (data) => console.error(`[${sessionId}] [dev:err] ${data.trim()}`),
+  })
+
+  // Wait for port 3000 (up to 60s)
+  console.log(`[${sessionId}] Waiting for port 3000...`)
+  try {
+    await sandbox.commands.run(
+      "timeout 60 bash -c 'until nc -z localhost 3000; do sleep 1; done'",
+      { timeoutMs: 65000 }
+    )
+  } catch (err) {
+    console.warn(`[${sessionId}] Warning: Port 3000 did not become ready in time.`)
+  }
 
   const host = await sandbox.getHost(3000)
   const previewUrl = `https://${host}`
@@ -55,6 +137,7 @@ export async function createSession(
     sandbox,
     previewUrl,
     lastActivity: Date.now(),
+    chatHistory: [],
   }
 
   sessions.set(sessionId, session)
@@ -72,7 +155,7 @@ export async function createSession(
 
 export async function connectToSessionProcess(
   sessionId: string,
-  _handlers: ClaudeOutputHandlers = {}
+  _handlers: OpenCodeOutputHandlers = {}
 ): Promise<Session | undefined> {
   const existing = sessions.get(sessionId)
   if (existing) {
@@ -88,11 +171,15 @@ export async function connectToSessionProcess(
   console.log(`[${sessionId}] Restoring session from DB...`)
   try {
     const sandbox = await Sandbox.connect(record.sandboxId)
+    const rows = db.select().from(messagesTable).where(eq(messagesTable.sessionId, sessionId)).orderBy(asc(messagesTable.createdAt)).all()
+    const chatHistory = rows.map(r => ({ role: r.role, content: r.content }) as ChatMessage)
+
     const session: Session = {
       id: sessionId,
       sandbox,
       previewUrl: record.previewUrl,
       lastActivity: Date.now(),
+      chatHistory,
     }
     sessions.set(sessionId, session)
     resetIdleTimer(sessionId, session)
@@ -166,60 +253,63 @@ export async function detachSession(sessionId: string): Promise<void> {
   resetIdleTimer(sessionId, session)
 }
 
-export async function runClaudeTurn(
+export async function runOpenCodeTurn(
   sessionId: string,
   prompt: string,
-  handlers: ClaudeOutputHandlers = {}
+  handlers: OpenCodeOutputHandlers = {}
 ): Promise<void> {
   const session = sessions.get(sessionId)
   if (!session) {
     throw new Error(`Session ${sessionId} not found`)
   }
 
+  // Add the prompt to history BEFORE running the turn
+  session.chatHistory.push({ role: 'user', content: prompt });
+  
+  // Persistence: Save user message to DB
+  db.insert(messagesTable).values({
+    id: Math.random().toString(36).slice(2),
+    sessionId,
+    role: 'user',
+    content: prompt,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  }).run()
+
   const previousTurn = session.pendingTurn ?? Promise.resolve()
   const nextTurn = previousTurn.catch(() => {}).then(async () => {
     touchSession(sessionId)
-    console.log(`[${sessionId}] Running Claude turn...`)
-
-    const escapedPrompt = JSON.stringify(prompt)
-    const resumeArg = session.claudeSessionId
-      ? ` --resume ${JSON.stringify(session.claudeSessionId)}`
-      : ''
-
-    let stdoutBuffer = ''
-    const claudeProcess = await session.sandbox.commands.run(
-      `${CLAUDE_BIN} --dangerously-skip-permissions -p --output-format stream-json --verbose${resumeArg} ${escapedPrompt}`,
-      {
-        cwd: WORKSPACE_DIR,
-        timeoutMs: 0,
-        envs: {
-          ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY!,
-          PATH: `/home/user/.local/bin:${process.env.PATH ?? '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'}`,
-        },
-        onStdout: async (data) => {
-          stdoutBuffer += data
-          await handlers.onStdout?.(data)
-        },
-        onStderr: handlers.onStderr,
-        background: true,
-      }
-    )
-
-    session.activeClaudeProcess = claudeProcess
+    console.log(`[${sessionId}] Running OpenCode turn (Direct OpenRouter)...`)
 
     try {
-      await claudeProcess.wait()
+      const fullResponse = await runOpenCodeTurnDirect(
+        session.sandbox,
+        session.chatHistory,
+        handlers
+      );
+
+      session.chatHistory.push({ role: 'assistant', content: fullResponse });
+
+      // Persistence: Save assistant message to DB
+      db.insert(messagesTable).values({
+        id: Math.random().toString(36).slice(2),
+        sessionId,
+        role: 'assistant',
+        content: fullResponse,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }).run()
+
+      // Final result signal
+      await handlers.onStdout?.(JSON.stringify({ 
+        type: 'result', 
+        session_id: session.openCodeSessionId || session.id 
+      }) + '\n')
+
+    } catch (error: any) {
+      console.error(`[${sessionId}] Agent error:`, error)
+      await handlers.onStderr?.(`Agent Error: ${error.message}\n`)
     } finally {
-      session.activeClaudeProcess = undefined
-      for (const line of stdoutBuffer.split('\n')) {
-        if (!line.trim()) continue
-        try {
-          const parsed = JSON.parse(line)
-          if (parsed.type === 'result' && typeof parsed.session_id === 'string') {
-            session.claudeSessionId = parsed.session_id
-          }
-        } catch {}
-      }
       touchSession(sessionId)
     }
   })
@@ -268,7 +358,7 @@ export interface DeploymentResult {
 
 export async function deploySessionToCloudflare(
   sessionId: string,
-  handlers: ClaudeOutputHandlers = {}
+  handlers: OpenCodeOutputHandlers = {}
 ): Promise<DeploymentResult> {
 
   const session = sessions.get(sessionId)
@@ -397,7 +487,7 @@ export async function deploySessionToCloudflare(
   
   return {
     url: deployedUrl,
-    deployedName: `claude-ide-${sessionId.toLowerCase()}`,
+    deployedName: `opencode-ide-${sessionId.toLowerCase()}`,
     namespace: dispatchNamespace,
     previewUrl: session.previewUrl,
   }

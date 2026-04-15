@@ -49,8 +49,8 @@ export default function Home() {
       <div className="mx-auto max-w-5xl px-6 py-10">
         <div className="mb-8 flex items-center justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-semibold tracking-tight">Claude Web IDE</h1>
-            <p className="mt-2 text-sm text-gray-400">Create a sandbox once, then reconnect to it from its project URL.</p>
+            <h1 className="text-2xl font-semibold tracking-tight">OpenCode Web IDE</h1>
+            <p className="mt-2 text-sm text-gray-400">Build, preview, and deploy websites with OpenCode and OpenRouter.</p>
           </div>
           <button
             className="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
