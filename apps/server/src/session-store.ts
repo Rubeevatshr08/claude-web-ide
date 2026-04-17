@@ -8,6 +8,7 @@ export interface SessionRecord {
   id: string
   sandboxId: string
   previewUrl: string
+  orchestratorUrl: string
   createdAt: string
   updatedAt: string
   status: 'active' | 'destroyed'
@@ -33,6 +34,7 @@ export async function listSessionRecords(): Promise<SessionRecord[]> {
     id: row.id,
     sandboxId: row.sandboxId,
     previewUrl: row.previewUrl,
+    orchestratorUrl: row.orchestratorUrl,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     status: row.status,
@@ -49,6 +51,7 @@ export async function getSessionRecord(id: string): Promise<SessionRecord | unde
     id: row.id,
     sandboxId: row.sandboxId,
     previewUrl: row.previewUrl,
+    orchestratorUrl: row.orchestratorUrl,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     status: row.status,
@@ -64,6 +67,7 @@ export async function upsertSessionRecord(record: SessionRecord): Promise<void> 
       id: record.id,
       sandboxId: record.sandboxId,
       previewUrl: record.previewUrl,
+      orchestratorUrl: record.orchestratorUrl,
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
       status: record.status,
@@ -75,6 +79,7 @@ export async function upsertSessionRecord(record: SessionRecord): Promise<void> 
       set: {
         sandboxId: record.sandboxId,
         previewUrl: record.previewUrl,
+        orchestratorUrl: record.orchestratorUrl,
         createdAt: record.createdAt,
         updatedAt: record.updatedAt,
         status: record.status,

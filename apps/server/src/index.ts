@@ -153,6 +153,33 @@ const httpServer = createServer((req, res) => {
 
 
 
+  if (req.method === 'POST' && url.pathname.match(/\/sessions\/[^/]+\/task/)) {
+    const sessionId = decodeURIComponent(url.pathname.split('/')[2]).trim()
+    
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', async () => {
+      try {
+        const { task } = JSON.parse(body);
+        if (!task) throw new Error('task is required');
+
+        res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
+        
+        const handlers = {
+          onStdout: (data: string) => { res.write(data); },
+          onStderr: (data: string) => { res.write(JSON.stringify({ type: 'error', message: data }) + '\n'); }
+        };
+
+        await runOpenCodeTurn(sessionId, task, handlers);
+        res.end();
+      } catch (err: any) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
+
   if (req.method === 'POST' && url.pathname.match(/\/sessions\/[^/]+\/deploy/)) {
     const sessionId = decodeURIComponent(url.pathname.split('/')[2]).trim()
 

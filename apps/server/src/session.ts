@@ -1,8 +1,8 @@
-import { Sandbox, CommandHandle } from '@e2b/code-interpreter'
+import { Sandbox } from '@e2b/code-interpreter'
 import { getSessionRecord, markSessionDestroyed, upsertSessionRecord } from './session-store'
 import path from 'path'
 
-import { runOpenCodeTurnDirect, ChatMessage } from './agent/opencodeAgent'
+import { ChatMessage } from './agent/opencodeAgent'
 import { db } from './db'
 import { messagesTable } from './schema'
 import { eq, asc } from 'drizzle-orm'
@@ -11,6 +11,7 @@ export interface Session {
   id: string
   sandbox: Sandbox
   previewUrl: string
+  orchestratorUrl: string
   openCodeSessionId?: string
   activeOpenCodeProcess?: any
   pendingTurn?: Promise<void>
@@ -53,11 +54,13 @@ export async function createSession(
 
   console.log(`[${sessionId}] Setup complete. Seeding core files and clearing port 3000...`)
 
-  // Aggressively kill anything on port 3000
+  // Aggressively kill anything on port 3000 and any next-server
   const killCmd = `
     fuser -k 3000/tcp || true
-    kill -9 $(lsof -t -i:3000) 2>/dev/null || true
-    kill -9 $(netstat -nlp | grep :3000 | awk '{print $7}' | cut -d/ -f1) 2>/dev/null || true
+    killall -9 node 2>/dev/null || true
+    pkill -9 -f "next dev" || true
+    pkill -9 -f "next-server" || true
+    rm -rf .next next.config.ts next.config.js open-next.config.ts 2>/dev/null || true
   `
   await sandbox.commands.run(killCmd).catch(() => {})
 
@@ -96,9 +99,17 @@ body {
 const nextConfig = {
   typescript: { ignoreBuildErrors: true },
   eslint: { ignoreDuringBuilds: true },
-  experimental: {
-    allowedDevOrigins: ['*']
-  }
+  allowedDevOrigins: ["*.e2b.app", "*.e2b.dev", "localhost", "127.0.0.1"],
+  async headers() {
+    return [
+      {
+        source: '/(.*)',
+        headers: [
+          { key: 'Content-Security-Policy', value: "frame-ancestors *" },
+        ],
+      },
+    ]
+  },
 };
 export default nextConfig;`
 
@@ -114,28 +125,43 @@ export default nextConfig;`
   void sandbox.commands.run('CHOKIDAR_USEPOLLING=true CHOKIDAR_INTERVAL=500 HOSTNAME=0.0.0.0 PORT=3000 npm run dev', {
     cwd: WORKSPACE_DIR,
     background: true,
-    onStdout: (data) => console.log(`[${sessionId}] [dev] ${data.trim()}`),
-    onStderr: (data) => console.error(`[${sessionId}] [dev:err] ${data.trim()}`),
+    onStdout: (data: string) => console.log(`[${sessionId}] [dev] ${data.trim()}`),
+    onStderr: (data: string) => console.error(`[${sessionId}] [dev:err] ${data.trim()}`),
   })
 
-  // Wait for port 3000 (up to 60s)
-  console.log(`[${sessionId}] Waiting for port 3000...`)
+  // Start Orchestrator on port 8000
+  void sandbox.commands.run('tsx /home/user/orchestrator/index.ts', {
+    cwd: '/home/user/orchestrator',
+    background: true,
+    envs: {
+      OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY || "",
+      OPENROUTER_MODEL: process.env.OPENROUTER_MODEL || "anthropic/claude-3.5-sonnet",
+    },
+    onStdout: (data: string) => console.log(`[${sessionId}] [orchestrator] ${data.trim()}`),
+    onStderr: (data: string) => console.error(`[${sessionId}] [orchestrator:err] ${data.trim()}`),
+  })
+
+  // Wait for port 3000 (up to 60s) and port 8000
+  console.log(`[${sessionId}] Waiting for port 3000 and 8000...`)
   try {
     await sandbox.commands.run(
-      "timeout 60 bash -c 'until nc -z localhost 3000; do sleep 1; done'",
+      "timeout 60 bash -c 'until nc -z localhost 3000 && nc -z localhost 8000; do sleep 1; done'",
       { timeoutMs: 65000 }
     )
   } catch (err) {
-    console.warn(`[${sessionId}] Warning: Port 3000 did not become ready in time.`)
+    console.warn(`[${sessionId}] Warning: Ports did not become ready in time.`)
   }
 
   const host = await sandbox.getHost(3000)
+  const orchestratorHost = await sandbox.getHost(8000)
   const previewUrl = `https://${host}`
+  const orchestratorUrl = `https://${orchestratorHost}`
 
   const session: Session = {
     id: sessionId,
     sandbox,
     previewUrl,
+    orchestratorUrl,
     lastActivity: Date.now(),
     chatHistory: [],
   }
@@ -146,6 +172,7 @@ export default nextConfig;`
     id: sessionId,
     sandboxId: sandbox.sandboxId,
     previewUrl,
+    orchestratorUrl,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     status: 'active',
@@ -178,6 +205,7 @@ export async function connectToSessionProcess(
       id: sessionId,
       sandbox,
       previewUrl: record.previewUrl,
+      orchestratorUrl: record.orchestratorUrl,
       lastActivity: Date.now(),
       chatHistory,
     }
@@ -211,8 +239,8 @@ async function runFallbackSetup(sessionId: string, sandbox: Sandbox): Promise<vo
 
   const setupResult = await sandbox.commands.run('bash /setup.sh', {
     timeoutMs: 5 * 60 * 1000,
-    onStdout: (data) => console.log(`[setup] ${data}`),
-    onStderr: (data) => console.error(`[setup:err] ${data}`),
+    onStdout: (data: string) => console.log(`[setup] ${data}`),
+    onStderr: (data: string) => console.error(`[setup:err] ${data}`),
   })
 
   if (setupResult.exitCode !== 0) {
@@ -238,6 +266,7 @@ export function touchSession(sessionId: string): void {
       id: session.id,
       sandboxId: session.sandbox.sandboxId,
       previewUrl: session.previewUrl,
+      orchestratorUrl: session.orchestratorUrl,
       createdAt: new Date(session.lastActivity).toISOString(),
       updatedAt: new Date().toISOString(),
       status: 'active',
@@ -282,11 +311,55 @@ export async function runOpenCodeTurn(
     console.log(`[${sessionId}] Running OpenCode turn (Direct OpenRouter)...`)
 
     try {
-      const fullResponse = await runOpenCodeTurnDirect(
-        session.sandbox,
-        session.chatHistory,
-        handlers
-      );
+      const response = await fetch(`${session.orchestratorUrl}/task`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ history: session.chatHistory })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Orchestrator error: ${response.status} ${await response.text()}`);
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error("Failed to get response reader");
+
+      let fullResponse = "";
+      const decoder = new TextDecoder();
+      let streamBuffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        streamBuffer += decoder.decode(value, { stream: true });
+        const lines = streamBuffer.split('\n');
+        streamBuffer = lines.pop() || "";
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const data = JSON.parse(line);
+            if (data.type === 'assistant' && data.chunk) {
+              fullResponse += data.chunk;
+              await handlers.onStdout?.(JSON.stringify({ 
+                type: 'assistant', 
+                message: { content: [{ type: 'text', text: data.chunk }] } 
+              }) + '\n');
+            } else if (data.type === 'status') {
+              await handlers.onStdout?.(JSON.stringify(data) + '\n');
+            } else if (data.type === 'file_changed') {
+              await handlers.onStdout?.(JSON.stringify(data) + '\n');
+            } else if (data.type === 'result') {
+               // turn finished
+            } else if (data.type === 'error') {
+              throw new Error(data.message);
+            }
+          } catch (e) {
+            console.warn("Failed to parse orchestrator message:", line);
+          }
+        }
+      }
 
       session.chatHistory.push({ role: 'assistant', content: fullResponse });
 
@@ -385,11 +458,11 @@ export async function deploySessionToCloudflare(
       NODE_OPTIONS: '--max-old-space-size=1536',
       NEXT_TELEMETRY_DISABLED: '1',
     },
-    onStdout: (data) => {
+    onStdout: (data: string) => {
       console.log(`[${sessionId}][next-build] ${data.trim()}`)
       void handlers.onStdout?.(data)
     },
-    onStderr: (data) => {
+    onStderr: (data: string) => {
       console.error(`[${sessionId}][next-build:err] ${data.trim()}`)
       void handlers.onStderr?.(data)
     },
@@ -407,11 +480,11 @@ export async function deploySessionToCloudflare(
   await session.sandbox.commands.run('npm run start', {
     cwd: WORKSPACE_DIR,
     background: true,
-    onStdout: (data) => {
+    onStdout: (data: string) => {
       console.log(`[${sessionId}][server] ${data.trim()}`)
       void handlers.onStdout?.(data)
     },
-    onStderr: (data) => {
+    onStderr: (data: string) => {
       console.error(`[${sessionId}][server:err] ${data.trim()}`)
       void handlers.onStderr?.(data)
     },
@@ -432,11 +505,11 @@ export async function deploySessionToCloudflare(
       NODE_OPTIONS: '--max-old-space-size=1536',
       NEXT_TELEMETRY_DISABLED: '1',
     },
-    onStdout: (data) => {
+    onStdout: (data: string) => {
       console.log(`[${sessionId}][cf-build] ${data.trim()}`)
       void handlers.onStdout?.(data)
     },
-    onStderr: (data) => {
+    onStderr: (data: string) => {
       console.error(`[${sessionId}][cf-build:err] ${data.trim()}`)
       void handlers.onStderr?.(data)
     },
@@ -457,11 +530,11 @@ export async function deploySessionToCloudflare(
       CLOUDFLARE_API_TOKEN: apiToken,
       CLOUDFLARE_ACCOUNT_ID: accountId,
     },
-    onStdout: (data) => {
+    onStdout: (data: string) => {
       console.log(`[${sessionId}][deploy] ${data.trim()}`)
       void handlers.onStdout?.(data)
     },
-    onStderr: (data) => {
+    onStderr: (data: string) => {
       console.error(`[${sessionId}][deploy:err] ${data.trim()}`)
       void handlers.onStderr?.(data)
     },
@@ -479,6 +552,7 @@ export async function deploySessionToCloudflare(
     id: sessionId,
     sandboxId: session.sandbox.sandboxId,
     previewUrl: session.previewUrl,
+    orchestratorUrl: session.orchestratorUrl,
     createdAt: new Date(session.lastActivity).toISOString(), // rough estimate
     updatedAt: new Date().toISOString(),
     status: 'active',

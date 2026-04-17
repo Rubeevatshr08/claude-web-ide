@@ -6,8 +6,8 @@ import { template } from './template'
 
 async function main() {
   await Template.build(template, 'claude-web-ide-dev', {
-    cpuCount: 2,
-    memoryMB: 4096,
+    cpuCount: 4,
+    memoryMB: 8192,
     onBuildLogs: defaultBuildLogger(),
   })
 }

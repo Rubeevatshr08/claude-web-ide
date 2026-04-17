@@ -22,7 +22,8 @@
     "langchain": "^0.2.20",
     "uuid": "^9.0.0",
     "ws": "^8.18.0",
-    "zod": "^3.25.76"
+    "zod": "^3.25.76",
+    "@opencode-ai/sdk": "latest"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",

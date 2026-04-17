@@ -9,5 +9,6 @@ const DB_PATH = path.join(DATA_DIR, 'sessions.db')
 mkdirSync(DATA_DIR, { recursive: true })
 
 const sqlite = new Database(DB_PATH)
+sqlite.exec('PRAGMA journal_mode = WAL')
 export const db = drizzle(sqlite)
 export { sqlite, DB_PATH }

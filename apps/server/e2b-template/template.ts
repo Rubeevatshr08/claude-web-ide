@@ -13,6 +13,6 @@ export const template = Template({
 })
   .fromDockerfile(dockerfileContent)
   .setStartCmd(
-    'cd /home/user/workspace && npm run dev -- --hostname 0.0.0.0 --port 3000',
+    'cd /home/user/workspace && sleep 5 && CHOKIDAR_USEPOLLING=true NODE_OPTIONS=--max-old-space-size=1536 npm run dev -- --hostname 0.0.0.0 --port 3000',
     waitForPort(3000)
   )
