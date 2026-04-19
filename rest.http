@@ -1,0 +1,32 @@
+### Orchestrator Manual Test Requests
+# Use the REST Client extension in VS Code to run these.
+# Replace {{sandboxId}} with an active E2B sandbox ID.
+# Replace {{previewUrl}} with the sandbox URL provided by the server.
+
+@baseUrl = http://localhost:8080
+@sessionId = {{sessionId}}
+
+### 1. List All Active Sessions (Server API)
+GET {{baseUrl}}/sessions
+Content-Type: application/json
+
+### 2. Create a New Session (Server API)
+POST {{baseUrl}}/sessions
+Content-Type: application/json
+
+### 3. Send Task to CLI (via Server)
+# This uses the server's /sessions/:id/task endpoint, which now runs the CLI directly
+POST {{baseUrl}}/sessions/{{sessionId}}/task
+Content-Type: application/json
+
+{
+    "task": "Create a simple landing page with a blue header saying 'Hello World' and a centered button."
+}
+
+### 4. Check Session Status (Server API)
+GET {{baseUrl}}/sessions/{{sessionId}}/exists
+Content-Type: application/json
+
+### 5. Deploy to Cloudflare (Server API)
+POST {{baseUrl}}/sessions/{{sessionId}}/deploy
+Content-Type: application/json

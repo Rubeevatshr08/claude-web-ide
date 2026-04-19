@@ -17,24 +17,20 @@ WORKDIR /home/user/workspace
 # Copy the pre-scaffolded Next.js template.
 COPY templates/nextjs-pages /home/user/workspace
 
-# Copy the Orchestrator.
-COPY orchestrator /home/user/orchestrator
+# Copy the setup script.
+COPY setup.sh /home/user/setup.sh
+RUN chmod +x /home/user/setup.sh
 
 WORKDIR /home/user/workspace
 
 # Install dependencies in the sandbox.
 RUN npm install --legacy-peer-deps
 
-# Install orchestrator dependencies.
-WORKDIR /home/user/orchestrator
-RUN npm install
-
-# Install tsx globally to run the orchestrator.
+# Install tsx globally to run tools.
 RUN npm install -g tsx opencode-ai
 
 WORKDIR /home/user/workspace
 RUN chown -R 1000:1000 /home/user
 
-# Port 8000 for Orchestrator, Port 3000 for Next.js.
-EXPOSE 8000
+# Port 3000 for Next.js.
 EXPOSE 3000

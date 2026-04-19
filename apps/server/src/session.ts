@@ -2,16 +2,21 @@ import { Sandbox } from '@e2b/code-interpreter'
 import { getSessionRecord, markSessionDestroyed, upsertSessionRecord } from './session-store'
 import path from 'path'
 
-import { ChatMessage } from './agent/opencodeAgent'
 import { db } from './db'
 import { messagesTable } from './schema'
 import { eq, asc } from 'drizzle-orm'
+
+export interface ChatMessage {
+  role: 'system' | 'user' | 'assistant' | 'tool'
+  content: string | null
+  tool_call_id?: string
+  tool_calls?: any[]
+}
 
 export interface Session {
   id: string
   sandbox: Sandbox
   previewUrl: string
-  orchestratorUrl: string
   openCodeSessionId?: string
   activeOpenCodeProcess?: any
   pendingTurn?: Promise<void>
@@ -46,122 +51,35 @@ export async function createSession(
   const sessionId = sandbox.sandboxId
   console.log(`[${sessionId}] Creating sandbox...`)
 
-  if (e2bTemplate) {
-    console.log(`[${sessionId}] Using prebuilt E2B template: ${e2bTemplate}`)
-  } else {
-    await runFallbackSetup(sessionId, sandbox)
-  }
-
-  console.log(`[${sessionId}] Setup complete. Seeding core files and clearing port 3000...`)
-
-  // Aggressively kill anything on port 3000 and any next-server
-  const killCmd = `
-    fuser -k 3000/tcp || true
-    killall -9 node 2>/dev/null || true
-    pkill -9 -f "next dev" || true
-    pkill -9 -f "next-server" || true
-    rm -rf .next next.config.ts next.config.js open-next.config.ts 2>/dev/null || true
-  `
-  await sandbox.commands.run(killCmd).catch(() => {})
-
-  // Ensure essential Next.js files exist to prevent "missing required components" errors
-  await sandbox.commands.run('mkdir -p pages styles', { cwd: WORKSPACE_DIR })
-  
-  const _appContent = `import '../styles/globals.css'
-import type { AppProps } from 'next/app'
-
-export default function App({ Component, pageProps }: AppProps) {
-  return <Component {...pageProps} />
-}`
-  const _documentContent = `import { Html, Head, Main, NextScript } from 'next/document'
-
-export default function Document() {
-  return (
-    <Html lang="en">
-      <Head />
-      <body className="bg-black text-white">
-        <Main />
-        <NextScript />
-      </body>
-    </Html>
-  )
-}`
-  const globalsCss = `@tailwind base;
-@tailwind components;
-@tailwind utilities;
-
-body {
-  background: black;
-  color: white;
-}`
-
-  const nextConfigContent = `/** @type {import('next').NextConfig} */
-const nextConfig = {
-  typescript: { ignoreBuildErrors: true },
-  eslint: { ignoreDuringBuilds: true },
-  allowedDevOrigins: ["*.e2b.app", "*.e2b.dev", "localhost", "127.0.0.1"],
-  async headers() {
-    return [
-      {
-        source: '/(.*)',
-        headers: [
-          { key: 'Content-Security-Policy', value: "frame-ancestors *" },
-        ],
-      },
-    ]
-  },
-};
-export default nextConfig;`
-
-  await sandbox.files.write(path.join(WORKSPACE_DIR, 'pages/_app.tsx'), _appContent)
-  await sandbox.files.write(path.join(WORKSPACE_DIR, 'pages/_document.tsx'), _documentContent)
-  await sandbox.files.write(path.join(WORKSPACE_DIR, 'styles/globals.css'), globalsCss)
-  await sandbox.files.write(path.join(WORKSPACE_DIR, 'next.config.mjs'), nextConfigContent)
-
-  // Clear Next.js cache to prevent ENOENT errors
-  await sandbox.commands.run('rm -rf .next', { cwd: WORKSPACE_DIR }).catch(() => {})
-
-  // Start Next.js dev server explicitly on port 3000
-  void sandbox.commands.run('CHOKIDAR_USEPOLLING=true CHOKIDAR_INTERVAL=500 HOSTNAME=0.0.0.0 PORT=3000 npm run dev', {
-    cwd: WORKSPACE_DIR,
-    background: true,
-    onStdout: (data: string) => console.log(`[${sessionId}] [dev] ${data.trim()}`),
-    onStderr: (data: string) => console.error(`[${sessionId}] [dev:err] ${data.trim()}`),
-  })
-
-  // Start Orchestrator on port 8000
-  void sandbox.commands.run('tsx /home/user/orchestrator/index.ts', {
-    cwd: '/home/user/orchestrator',
-    background: true,
-    envs: {
-      OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY || "",
-      OPENROUTER_MODEL: process.env.OPENROUTER_MODEL || "anthropic/claude-3.5-sonnet",
-    },
-    onStdout: (data: string) => console.log(`[${sessionId}] [orchestrator] ${data.trim()}`),
-    onStderr: (data: string) => console.error(`[${sessionId}] [orchestrator:err] ${data.trim()}`),
-  })
-
-  // Wait for port 3000 (up to 60s) and port 8000
-  console.log(`[${sessionId}] Waiting for port 3000 and 8000...`)
+  console.log(`[${sessionId}] Starting services via setup.sh...`)
   try {
-    await sandbox.commands.run(
-      "timeout 60 bash -c 'until nc -z localhost 3000 && nc -z localhost 8000; do sleep 1; done'",
-      { timeoutMs: 65000 }
-    )
-  } catch (err) {
-    console.warn(`[${sessionId}] Warning: Ports did not become ready in time.`)
+    const result = await sandbox.commands.run('bash /home/user/setup.sh', {
+      timeoutMs: 75000, // 75 seconds to give setup.sh 60s + some overhead
+      envs: {
+        OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY || "",
+        OPENROUTER_MODEL: process.env.OPENROUTER_MODEL || "anthropic/claude-3.5-sonnet",
+      },
+      onStdout: (data: string) => console.log(`[${sessionId}] [setup] ${data.trim()}`),
+      onStderr: (data: string) => console.error(`[${sessionId}] [setup:err] ${data.trim()}`),
+    })
+
+    if (result.exitCode !== 0) {
+      throw new Error(`setup.sh failed with exit code ${result.exitCode}`)
+    }
+  } catch (err: any) {
+    console.error(`[${sessionId}] Critical: setup.sh failed.`, err)
+    // We should probably kill the sandbox here as it's broken
+    await sandbox.kill().catch(() => {})
+    throw new Error(`Failed to initialize session: ${err.message}`)
   }
 
   const host = await sandbox.getHost(3000)
-  const orchestratorHost = await sandbox.getHost(8000)
   const previewUrl = `https://${host}`
-  const orchestratorUrl = `https://${orchestratorHost}`
 
   const session: Session = {
     id: sessionId,
     sandbox,
     previewUrl,
-    orchestratorUrl,
     lastActivity: Date.now(),
     chatHistory: [],
   }
@@ -172,7 +90,6 @@ export default nextConfig;`
     id: sessionId,
     sandboxId: sandbox.sandboxId,
     previewUrl,
-    orchestratorUrl,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     status: 'active',
@@ -205,7 +122,6 @@ export async function connectToSessionProcess(
       id: sessionId,
       sandbox,
       previewUrl: record.previewUrl,
-      orchestratorUrl: record.orchestratorUrl,
       lastActivity: Date.now(),
       chatHistory,
     }
@@ -215,37 +131,6 @@ export async function connectToSessionProcess(
   } catch (err) {
     console.error(`[${sessionId}] Failed to reconnect to sandbox ${record.sandboxId}:`, err)
     return undefined
-  }
-}
-
-async function runFallbackSetup(sessionId: string, sandbox: Sandbox): Promise<void> {
-  console.log(`[${sessionId}] No E2B_TEMPLATE configured; running fallback setup script...`)
-
-  const fs = await import('fs')
-  const path = await import('path')
-  const candidates = [
-    path.resolve(__dirname, '../../setup.sh'),
-    path.resolve(__dirname, '../setup.sh'),
-    path.resolve(process.cwd(), 'setup.sh'),
-  ]
-  const setupPath = candidates.find((candidate) => fs.existsSync(candidate))
-
-  if (!setupPath) {
-    throw new Error('setup.sh not found — checked: ' + candidates.join(', '))
-  }
-
-  const setupScript = fs.readFileSync(setupPath, 'utf-8')
-  await sandbox.files.write('/setup.sh', setupScript)
-
-  const setupResult = await sandbox.commands.run('bash /setup.sh', {
-    timeoutMs: 5 * 60 * 1000,
-    onStdout: (data: string) => console.log(`[setup] ${data}`),
-    onStderr: (data: string) => console.error(`[setup:err] ${data}`),
-  })
-
-  if (setupResult.exitCode !== 0) {
-    await sandbox.kill()
-    throw new Error(`Setup failed with exit code ${setupResult.exitCode}`)
   }
 }
 
@@ -266,7 +151,6 @@ export function touchSession(sessionId: string): void {
       id: session.id,
       sandboxId: session.sandbox.sandboxId,
       previewUrl: session.previewUrl,
-      orchestratorUrl: session.orchestratorUrl,
       createdAt: new Date(session.lastActivity).toISOString(),
       updatedAt: new Date().toISOString(),
       status: 'active',
@@ -308,57 +192,32 @@ export async function runOpenCodeTurn(
   const previousTurn = session.pendingTurn ?? Promise.resolve()
   const nextTurn = previousTurn.catch(() => {}).then(async () => {
     touchSession(sessionId)
-    console.log(`[${sessionId}] Running OpenCode turn (Direct OpenRouter)...`)
+    console.log(`[${sessionId}] Running OpenCode turn (Direct CLI)...`)
 
     try {
-      const response = await fetch(`${session.orchestratorUrl}/task`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ history: session.chatHistory })
-      });
-
-      if (!response.ok) {
-        throw new Error(`Orchestrator error: ${response.status} ${await response.text()}`);
-      }
-
-      const reader = response.body?.getReader();
-      if (!reader) throw new Error("Failed to get response reader");
+      // Write prompt to file to avoid shell escaping issues
+      await session.sandbox.files.write('/tmp/prompt.txt', prompt);
 
       let fullResponse = "";
-      const decoder = new TextDecoder();
-      let streamBuffer = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        streamBuffer += decoder.decode(value, { stream: true });
-        const lines = streamBuffer.split('\n');
-        streamBuffer = lines.pop() || "";
-
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          try {
-            const data = JSON.parse(line);
-            if (data.type === 'assistant' && data.chunk) {
-              fullResponse += data.chunk;
-              await handlers.onStdout?.(JSON.stringify({ 
-                type: 'assistant', 
-                message: { content: [{ type: 'text', text: data.chunk }] } 
-              }) + '\n');
-            } else if (data.type === 'status') {
-              await handlers.onStdout?.(JSON.stringify(data) + '\n');
-            } else if (data.type === 'file_changed') {
-              await handlers.onStdout?.(JSON.stringify(data) + '\n');
-            } else if (data.type === 'result') {
-               // turn finished
-            } else if (data.type === 'error') {
-              throw new Error(data.message);
-            }
-          } catch (e) {
-            console.warn("Failed to parse orchestrator message:", line);
-          }
+      const result = await session.sandbox.commands.run(`opencode run "$(cat /tmp/prompt.txt)"`, {
+        cwd: WORKSPACE_DIR,
+        envs: {
+          OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY || "",
+        },
+        onStdout: async (out) => {
+          fullResponse += out;
+          await handlers.onStdout?.(JSON.stringify({ 
+            type: 'assistant', 
+            message: { content: [{ type: 'text', text: out }] } 
+          }) + '\n');
+        },
+        onStderr: async (err) => {
+          console.error(`[${sessionId}] Agent stderr:`, err);
         }
+      });
+
+      if (result.exitCode !== 0) {
+        throw new Error(`OpenCode CLI failed with exit code ${result.exitCode}`);
       }
 
       session.chatHistory.push({ role: 'assistant', content: fullResponse });
@@ -552,7 +411,6 @@ export async function deploySessionToCloudflare(
     id: sessionId,
     sandboxId: session.sandbox.sandboxId,
     previewUrl: session.previewUrl,
-    orchestratorUrl: session.orchestratorUrl,
     createdAt: new Date(session.lastActivity).toISOString(), // rough estimate
     updatedAt: new Date().toISOString(),
     status: 'active',

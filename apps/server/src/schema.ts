@@ -4,7 +4,6 @@ export const sessionsTable = sqliteTable('sessions', {
   id: text('id').primaryKey(),
   sandboxId: text('sandbox_id').notNull(),
   previewUrl: text('preview_url').notNull(),
-  orchestratorUrl: text('orchestrator_url').notNull().default(''),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
   status: text('status', { enum: ['active', 'destroyed'] }).notNull(),
